@@ -74,6 +74,11 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback, VideoStream.ControlL
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setBackgroundDrawableResource(android.R.color.black)
 
+        if (BuildConfig.DRAW_OVER_CUTOUT) {
+            window.attributes.layoutInDisplayCutoutMode =
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
 
         status = TextView(this).apply {

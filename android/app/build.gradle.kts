@@ -3,6 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val drawOverCutout = providers.gradleProperty("drawOverCutout")
+.map(String::toBoolean)
+.getOrElse(true)
+
+android {
+    defaultConfig {
+        buildConfigField("boolean", "DRAW_OVER_CUTOUT", drawOverCutout.toString())
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
 android {
     namespace = "com.moreland.display"
     compileSdk = 34
