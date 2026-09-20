@@ -1,0 +1,39 @@
+# moreland protocol conformance corpus
+# protocol VERSION: 3
+# columns: name\tkind\tdirection\texpect\tfields\thex
+stream_header_valid_h264	stream_header	h2d	ok	width=1920;height=1200;framerate=60;codec=H264	4d524c440003078004b0003c00000000
+stream_header_valid_h265	stream_header	h2d	ok	width=1920;height=1200;framerate=60;codec=H265	4d524c440003078004b0003c01000000
+stream_header_bad_magic	stream_header	h2d	err	bad magic	585858580003078004b0003c00000000
+stream_header_version_0	stream_header	h2d	err	version 0	4d524c440000078004b0003c00000000
+stream_header_version_1	stream_header	h2d	err	version 1	4d524c440001078004b0003c00000000
+stream_header_version_2	stream_header	h2d	err	version 2	4d524c440002078004b0003c00000000
+stream_header_version_4	stream_header	h2d	err	version 4	4d524c440004078004b0003c00000000
+stream_header_unknown_codec	stream_header	h2d	err	codec id 255	4d524c440003078004b0003cff000000
+stream_header_truncated_8	stream_header	h2d	err		4d524c4400030780
+stream_header_truncated_15	stream_header	h2d	err		4d524c440003078004b0003c000000
+frame_header_valid_keyframe	frame_header	h2d	ok	length=32389;pts_ns=1666666560;keyframe=true;control=false	00007e85000000006357504001000000
+frame_header_valid_delta	frame_header	h2d	ok	length=32389;pts_ns=1666666560;keyframe=false;control=false	00007e85000000006357504000000000
+frame_header_control	frame_header	h2d	ok	length=2;pts_ns=0;keyframe=false;control=true	00000002000000000000000002000000
+frame_header_both_flags	frame_header	h2d	ok	length=2;pts_ns=0;keyframe=true;control=true	00000002000000000000000003000000
+frame_header_zero_length	frame_header	h2d	ok	length=0;pts_ns=0;keyframe=false;control=false	00000000000000000000000000000000
+frame_header_unknown_flag_bit	frame_header	h2d	ok	length=1;pts_ns=0;keyframe=false;control=false	00000001000000000000000004000000
+frame_header_truncated_8	frame_header	h2d	err		0000000100000000
+control_brightness_0	control	h2d	ok	kind=Brightness;value=0	0100
+control_brightness_100	control	h2d	ok	kind=Brightness;value=100	0164
+control_rotation_0	control	h2d	ok	kind=Rotation;value=0	0200
+control_rotation_270	control	h2d	ok	kind=Rotation;value=3	0203
+control_rotation_out_of_range	control	h2d	ok	kind=Rotation;value=255	02ff
+control_unknown_kind	control	h2d	err	unknown control kind	ff00
+control_unknown_kind_zero	control	h2d	err	unknown control kind	0000
+control_truncated_1	control	h2d	err		01
+control_truncated_0	control	h2d	err		
+ack_zero	ack	d2h	ok	pts_ns=0	010000000000000000
+ack_typical	ack	d2h	ok	pts_ns=1666666560	010000000063575040
+ack_max	ack	d2h	ok	pts_ns=18446744073709551615	01ffffffffffffffff
+touch_down_0_0	touch	d2h	ok	action=Down;x=0;y=0	020000000000000000
+touch_move_center	touch	d2h	ok	action=Move;x=32768;y=32768	020100800080000000
+touch_up_max	touch	d2h	ok	action=Up;x=65535;y=65535	020200ffffffff0000
+touch_cancel	touch	d2h	ok	action=Cancel;x=4660;y=43981	0203001234abcd0000
+reverse_unknown_type	reverse	d2h	err	unknown reverse message type	ee0000000000000000
+reverse_truncated	reverse	d2h	err		01000000
+touch_unknown_action	reverse	d2h	err	unknown touch action	027f00000000000000

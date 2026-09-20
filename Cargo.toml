@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["crates/capture", "crates/encoder", "crates/protocol", "crates/transport", "crates/daemon"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+signal-hook = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# Generates bindings for zkde_screencast_unstable_v1 at build time. The XML is
+# located on the system rather than vendored: it is LGPL-2.1-or-later and this
+# project is Apache-2.0. See crates/capture/build.rs.
+wayland-scanner = "0.31"
+# Not used directly: the scanner-generated interface tables reference it.
+wayland-backend = "0.3"
+rustix = { version = "1", features = ["fs", "mm", "time"] }
+memmap2 = "0.9"
+png = "0.18"
+gbm = "0.18"
+drm-fourcc = "2.2"
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = { version = "0.25", features = ["v1_24"] }
+gstreamer-allocators = "0.25"
+capture = { path = "crates/capture" }
+protocol = { path = "crates/protocol" }
+transport = { path = "crates/transport" }
+encoder = { path = "crates/encoder" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

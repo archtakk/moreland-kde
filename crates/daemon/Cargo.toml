@@ -1,0 +1,31 @@
+[package]
+name = "daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+signal-hook.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json = "1"
+capture.workspace = true
+encoder.workspace = true
+transport.workspace = true
+protocol.workspace = true
+# Virtual touchscreen. `evdev` owns the uinput ioctls and the
+# `input_event` struct layout; dropping to raw ioctls here would be more
+# code and less portable for no benefit.
+evdev = "0.13"
+
+[features]
+# On by default so a plain `cargo build --release` produces one binary that
+# handles both Hyprland and Plasma. `--no-default-features` strips the
+# plasma-wayland-protocols build dependency for anyone who does not want it.
+default = ["plasma"]
+plasma = ["capture/plasma"]
+
+[[bin]]
+name = "moreland"
+path = "src/main.rs"

@@ -1,0 +1,108 @@
+moreland — turn a USB-connected Android tablet into a second monitor
+
+USAGE
+    moreland [OPTIONS]
+
+    With no options it runs as a daemon: plug the tablet in and a virtual
+    monitor appears, unplug it and the monitor disappears.
+
+OPTIONS
+    --max-width <PX>    cap on auto-detected width     [default: 1920]
+    --native            stream the tablet's full panel resolution
+    --width <PX>        pin width  (requires --height)
+    --height <PX>       pin height (requires --width)
+                        width and height are the landscape dimensions; the
+                        virtual output is swapped when --rotation is 90/270
+    --fps <N>           virtual output refresh rate    [default: 90]
+                        120 measures better still; 144 saturates
+    --bitrate <KBPS>    H.264 target bitrate           [default: 20000]
+    --position <X>      x offset of the virtual output [default: 0]
+    --position-y <Y>    y offset of the virtual output [default: 1080]
+                        default sits below a primary at 0x0, no taller than
+                        1080px; override either axis to fit your layout
+    --output-name <NAME>
+                        name of the virtual output      [default: moreland]
+                        with one tablet, "moreland"; with several, the daemon
+                        appends a short serial suffix per session. Passing
+                        --output-name explicitly uses the name verbatim and
+                        refuses a second tablet rather than sharing it.
+                        required on labwc, which cannot create one and must
+                        be pointed at an existing headless output
+    --show-cursor       composite the mouse cursor into the stream
+
+    -b, --brightness <0-100>|<SERIAL=0-100>
+                        set the tablet's screen brightness on session start.
+                        0 is the darkest the window can go, 100 is full.
+                        `--brightness 80` sets every device without its own
+                        override; `--brightness RF8N50QRDNV=20` sets one.
+                        Both forms are repeatable and may be mixed in any
+                        order. The serial is the first column of
+                        `adb devices -l`, also printed by the daemon as
+                        `device <serial> connected`; matching is
+                        case-insensitive, and a serial that never connects
+                        is silently ignored. Note the space before the
+                        value: `--brightness SERIAL=N`, not
+                        `--brightness=SERIAL=N`. Omitting the flag leaves
+                        the device's own brightness untouched. Applied when
+                        the session connects; not changeable mid-session.
+    --rotation <DEG>|<SERIAL=DEG>
+                        rotate the tablet's display. DEG is one of:
+                          0   landscape
+                          90  portrait
+                          180 reverse landscape
+                          270 reverse portrait
+                        Same SERIAL=DEG form and case-insensitive serial
+                        matching as --brightness; e.g.
+                        `--rotation 0 --rotation RF8N50QRDNV=90`. The
+                        virtual output's width and height are swapped for
+                        90 and 270 so the host's output matches the
+                        tablet's rotated panel. Startup-only: changing this
+                        mid-session requires restarting the daemon.
+
+    --once              stream one session per ready tablet, then exit
+    --seconds <N>       stop after N seconds (implies --stats)
+    --stats             print round-trip latency statistics on exit
+    --json              with --stats, emit the statistics as JSON on stdout.
+                        One object per session, one per line; the tracing
+                        log moves to stderr. Used by scripts/bench.sh.
+    -h, --help          show this help
+
+NOTES
+    The tablet needs the companion app installed and USB debugging enabled.
+    Diagnostics from the device:  adb logcat -s Moreland
+
+    Touch works on every supported compositor: the tablet's screen is a
+    touchscreen for the virtual output. It needs write access to
+    /dev/uinput; run ./install.sh once, or see docs/TOUCH.md.
+    Pass --no-touch to disable it and stream with acks only.
+
+    --touch-mode <screen|pointer>
+                        `screen` (default) is a real uinput touchscreen:
+                        INPUT_PROP_DIRECT, multitouch protocol B. The
+                        compositor reads it through libinput and applies
+                        its own output association. On KWin the association
+                        is written to ~/.config/kcminputrc automatically;
+                        a manual choice in System Settings -> Input Devices
+                        -> Touchscreen takes precedence.
+
+                        `pointer` is an absolute pointer: touches move the
+                        mouse cursor to the corresponding position on the
+                        virtual output, a tap is a left-click, a drag is a
+                        left-button drag, and a long-press (~600 ms without
+                        moving) is a right-click. It needs no output
+                        association — the host positions the cursor
+                        directly from the desktop bounding box reported by
+                        `kscreen-doctor -o` — so it is the mode to use if
+                        the compositor refuses to associate the
+                        touchscreen with the virtual output.
+
+    Resolution is detected from the tablet's panel and matched to its aspect
+    ratio, capped at --max-width. Pass --width and --height together to pin it.
+
+    Brightness is applied with the activity window's screenBrightness — a
+    per-window value, not the system setting. It needs no permission and is
+    what the user sees while the display activity is in the foreground, which
+    it always is during a session. If you need to change the device's actual
+    system brightness (which persists after the app closes and is visible to
+    other apps), that requires WRITE_SETTINGS, granted via the Settings UI;
+    moreland does not ask for it.

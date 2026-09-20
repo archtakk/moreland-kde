@@ -1,0 +1,32 @@
+[Unit]
+Description=Moreland — Android tablet as a second monitor
+Documentation=https://github.com/zxcfghjkl/moreland
+
+# Needs a running Wayland compositor: the daemon creates one virtual output
+# per connected device (through hyprctl, kscreen-doctor, or wlr-randr as
+# appropriate) and connects to the compositor as a capture client for each.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/moreland
+Restart=on-failure
+RestartSec=5
+
+# The daemon idles on `adb track-devices`, so it costs nothing while waiting
+# and does not need to be socket-activated.
+
+# SIGTERM unwinds the RAII guards that remove every virtual output and every
+# adb forward. Sessions are joined in parallel, but each session notices the
+# shutdown flag between frames, and on KWin an idle virtual output can block
+# `next_frame` for several seconds. Give that time to finish, or the
+# compositor is left with phantom monitors after a stop.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# hyprctl needs to find the compositor instance.
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target

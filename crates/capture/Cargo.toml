@@ -1,0 +1,36 @@
+[package]
+name = "capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+# used by session.rs for renegotiation logging
+tracing-subscriber.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+rustix.workspace = true
+memmap2.workspace = true
+png.workspace = true
+gbm.workspace = true
+drm-fourcc.workspace = true
+wayland-scanner = { workspace = true, optional = true }
+wayland-backend = { workspace = true, optional = true }
+pipewire = { version = "0.10", optional = true }
+
+[features]
+# KDE Plasma capture backend. Off by default: it needs the
+# plasma-wayland-protocols XML at build time, and a Hyprland build must not
+# acquire a KDE dependency it never uses.
+plasma = ["dep:wayland-scanner", "dep:wayland-backend", "dep:pipewire"]
+
+[[bin]]
+name = "capture-probe"
+path = "src/bin/capture_probe.rs"
+
+[[bin]]
+name = "plasma-probe"
+path = "src/bin/plasma_probe.rs"
+required-features = ["plasma"]
