@@ -16,7 +16,7 @@ Plug the tablet in and a virtual monitor appears. Unplug it and the monitor
 disappears. Wayland-native, hardware-encoded, zero-copy - no VNC, no RDP, no X11.
 
 <sub>_More land: more screen real estate. And it lives next door to Wayland and
-Hyprland._</sub>
+Hyprland (KDE, too!)._</sub>
 
 ```
 ~19 ms    host → rendered on tablet, median round trip at 120 fps
@@ -25,10 +25,11 @@ Hyprland._</sub>
 0.6%      of one CPU core for capture
 ```
 
-> **Scope.** Verified on exactly one setup: Hyprland + AMD VA-API + a Xiaomi
-> Pad 6. Other GPUs are plausible and untested; other compositors need work.
+> **Scope.** Verified on: Hyprland + AMD VA-API + a Xiaomi
+> Pad 6 (by the original author, I haven't tested the fork on Hyprland yet). 
+> Intel GPUs are untested, other compositors need work.
 > See [Compatibility](#compatibility). Every number here is measured on that
-> hardware, not estimated - see [`docs/`](docs/) for how.
+> hardware (these are the old numbers and will be remeasured soon), not estimated - see [`docs/`](docs/) for how.
 
 Plug the cable in, and the tablet becomes a monitor - no pairing, no app to
 launch on the host, no settings dialog:
@@ -62,8 +63,7 @@ to have it silently not hold. See [Multi-GPU hosts](#multi-gpu-hosts).
 
 **Host**
 
-- Hyprland, or labwc with `wlr-randr` (see [Compatibility](#compatibility) for
-  others)
+- Hyprland, labwc with `wlr-randr`, or KDE Plasma (see [Compatibility](#compatibility))
 - A GPU with VA-API encode - AMD, Intel, or NVIDIA via `nvidia-vaapi-driver`
 - `gstreamer`, `gst-plugins-base`, `gst-plugin-va`, `libva`
 - `android-tools` (adb), Rust toolchain
@@ -87,7 +87,7 @@ nothing here.
 ## Install
 
 ```bash
-git clone https://github.com/adiimanav/moreland.git moreland && cd moreland
+git clone https://github.com/archtakk/moreland-kde.git moreland && cd moreland
 ./install.sh
 ```
 
@@ -110,6 +110,12 @@ Needs the Android SDK (`ANDROID_HOME`), platform 34, and JDK 17:
 cd android
 ANDROID_HOME=/opt/android-sdk ./gradlew assembleRelease
 adb install -r app/build/outputs/apk/release/app-release.apk
+
+# Or...
+./install-android.sh
+
+# ...to build and install the app automatically
+# on all connected adb devices
 ```
 
 <details>
@@ -135,6 +141,7 @@ journalctl --user -u moreland -f                  # logs
 ```
 
 Plug the tablet in. A monitor appears; drag windows to it.
+If on KDE, you can then set up the tablet's touchscreen in **System Settings → Input & Output → Touchscreen**
 
 ## Usage
 
@@ -267,7 +274,7 @@ To check your own machine:
 It reports the compositor, the capture protocol, the VA-API encoder and the ADB
 link, and names whatever blocks you. Note that your **distribution is not the
 deciding factor** - the compositor is. Fedora or Debian running Hyprland should
-work; Arch running Plasma does not.
+work; Arch running Plasma does not (the script will work with Plasma soon enough).
 
 On a compositor that implements `ext-image-copy-capture-v1`, only **one** stage
 is compositor-specific: creating the headless output. Capture uses that standard
@@ -307,7 +314,7 @@ so it is harmless while the tablet is unplugged.
   (or, with `--touch-mode pointer`, an absolute pointer). Pen, pressure, tilt
   and multi-touch are out of scope. See [docs/TOUCH.md](docs/TOUCH.md).
 - **The app must stay foregrounded.** Switching apps on the tablet stops the stream.
-- **No audio.** Video only.
+- **No audio.** Video only (another subject to change).
 - **Idle output drops to ~1 fps.** Correct, not a bug: Hyprland does not render a
   static headless output, so a motionless screen costs almost nothing. It jumps
   straight back to the configured rate on damage. Worth knowing when
@@ -315,7 +322,7 @@ so it is harmless while the tablet is unplugged.
   not the pipeline's.
 - **Mild softness** from upscaling and H.264 on dark backgrounds. Raise
   `--bitrate` or `--max-width` if it bothers you.
-- **Resizing the virtual output mid-session** restarts the pipeline - the encoder
+- **Resizing, rotating the virtual output mid-session** restarts the pipeline - the encoder
   and decoder are both configured for a fixed geometry.
 
 ## Security
@@ -369,7 +376,11 @@ wrong:
 | [02-encode.md](docs/02-encode.md)               | VA-API encoding and tuning                                     |
 | [03-transport.md](docs/03-transport.md)         | Wire protocol and USB transport                                |
 | [04-android-app.md](docs/04-android-app.md)     | The tablet app                                                 |
-| [05-daemon.md](docs/05-daemon.md)               | Hotplug detection and the service                              |
+| [05-daemon.md](docs/05-daemon.md)               | Hotplug detection and the service                             
+|
+| [06-plasma-backend.md](docs/06-plasma-backend.md)
+| About the KDE Plasma support
+|
 | [COMPATIBILITY.md](docs/COMPATIBILITY.md)       | What other compositors and GPUs need                           |
 | [REVERT.md](docs/REVERT.md)                     | How to undo everything                                         |
 
