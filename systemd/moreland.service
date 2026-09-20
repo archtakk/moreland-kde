@@ -1,6 +1,6 @@
 [Unit]
 Description=Moreland — Android tablet as a second monitor
-Documentation=https://github.com/zxcfghjkl/moreland-kde
+Documentation=https://github.com/archtakk/moreland-kde
 
 # Needs a running Wayland compositor: the daemon creates one virtual output
 # per connected device (through hyprctl, kscreen-doctor, or wlr-randr as
