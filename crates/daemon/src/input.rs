@@ -1,22 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Virtual touchscreen via `/dev/uinput`.
+//! Virtual input devices via `/dev/uinput`.
 //!
-//! A uinput touchscreen appears as `/dev/input/eventN`; every compositor
-//! reads input through libinput, so the device works on Hyprland, KWin,
-//! GNOME, Sway and labwc. No compositor protocol is involved.
+//! Two device types are supported, matching [`TouchMode`]:
 //!
-//! Associating the touchscreen with the virtual output is compositor
+//! - **Touchscreen.** A real uinput touchscreen (`INPUT_PROP_DIRECT`,
+//!   multitouch protocol B) that the compositor associates with an output.
+//!   Tap, drag and long-press all land where the finger is.
+//!
+//! - **Pointer.** A relative pointer that behaves like a laptop touchpad.
+//!   Finger motion drives the cursor *relatively* (the cursor does not jump
+//!   to the point of contact), tap is a left-click, a long-press without
+//!   moving is a right-click, and double-tap-then-drag is a click-drag. No
+//!   output association is involved anywhere in the path, so this mode works
+//!   on compositors that would refuse to associate an absolute pointer with
+//!   anything but their primary output.
+//!
+//! Every compositor reads input through libinput, so both devices work on
+//! Hyprland, KWin, GNOME, Sway and labwc. No compositor protocol is
+//! involved.
+//!
+//! Associating the *touchscreen* with the virtual output is compositor
 //! policy, not something the uinput device can specify. On KWin this is
 //! resolved by writing an entry to `~/.config/kcminputrc` and asking KWin
-//! to reload — see [`kwin_associate_touchscreen`]. On other compositors
-//! the user configures it once in the compositor's own settings.
+//! to reload — see [`kwin_associate_touchscreen`]. On other compositors the
+//! user configures it once in the compositor's own settings. The pointer
+//! device needs no association at all.
 
 use anyhow::{bail, Context, Result};
 use evdev::uinput::VirtualDevice;
 use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode,
-    PropType, UinputAbsSetup,
+    PropType, RelativeAxisCode, UinputAbsSetup,
 };
 use protocol::TouchAction;
 use std::path::PathBuf;
@@ -31,14 +46,29 @@ const PRODUCT_ID: u16 = 0x4c44;
 /// see it as a distinct device from the touchscreen mode.
 const PRODUCT_ID_POINTER: u16 = 0x4c45;
 
-/// How far the finger may drift from the initial touch before a gesture is
-/// reclassified from "tap" to "drag". 1% of the absolute range is ~19 px
-/// on a 1920-wide output.
-const DRAG_THRESHOLD: u32 = 65535 / 100;
+/// How far (in normalized units, per axis, from the DOWN position) the
+/// finger may drift and still count as a tap. 1500 / 65535 ≈ 2.3% of the
+/// tablet surface, which is roughly the slop a physical touchpad allows
+/// before it treats a touch as motion rather than a click.
+const TAP_MAX_MOVE: u32 = 1500;
 
-/// How long a touch must be held without moving before it becomes a
-/// right-click. 600 ms matches Android's own long-press timing.
+/// How long a touch must be held *without moving* before it becomes a
+/// right-click. 600 ms matches Android's own long-press timing. Any motion
+/// beyond [`TAP_MAX_MOVE`] cancels the timer.
 const LONG_PRESS: Duration = Duration::from_millis(600);
+
+/// How long after a tap a second touch is treated as the beginning of a
+/// double-tap drag. 300 ms is the usual double-click window.
+const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
+
+/// Default cursor sensitivity for `TouchMode::Pointer`: cursor pixels per
+/// unit of normalized finger motion.
+///
+/// A full swipe across the tablet (65535 units) moves the cursor about 3900
+/// px, which is roughly two screens on a 1920-wide desktop. That matches the
+/// effective sensitivity of a laptop touchpad, where 5 cm of finger travel
+/// covers most of the screen. Override with `--pointer-sensitivity`.
+pub const DEFAULT_POINTER_SENSITIVITY: f32 = 0.06;
 
 /// Which kind of virtual input device to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,169 +323,87 @@ fn trigger_kwin_reconfigure() -> Result<()> {
 
 // --------------------------------------------------------------- pointer ---
 
-/// Desktop bounding box, in global pixel coordinates.
-///
-/// An absolute pointer's `ABS_X`/`ABS_Y` cover the whole desktop, not a
-/// single output. To place the cursor at a specific position on the virtual
-/// output, the host needs to know where that output sits inside the
-/// desktop — hence the bounds.
-#[derive(Debug, Clone, Copy)]
-struct DesktopBounds {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
-}
-
-impl DesktopBounds {
-    fn width(&self) -> i32 {
-        (self.max_x - self.min_x).max(1)
-    }
-    fn height(&self) -> i32 {
-        (self.max_y - self.min_y).max(1)
-    }
-}
-
-/// Parse `Geometry: X,Y WxH` from a single `kscreen-doctor -o` line.
-fn parse_geometry(line: &str) -> Option<(i32, i32, i32, i32)> {
-    if line.contains(" disabled ") {
-        return None;
-    }
-    let pos = line.find("Geometry:")?;
-    let rest = line[pos + "Geometry:".len()..].trim();
-    let mut fields = rest.split_whitespace();
-    let pos_field = fields.next()?;
-    let size_field = fields.next()?;
-    let (x_str, y_str) = pos_field.split_once(',')?;
-    let (w_str, h_str) = size_field.split_once('x')?;
-    Some((
-        x_str.parse().ok()?,
-        y_str.parse().ok()?,
-        w_str.parse().ok()?,
-        h_str.parse().ok()?,
-    ))
-}
-
-/// Read the desktop layout from `kscreen-doctor -o`.
-///
-/// Returns the desktop bounding box, the virtual output's origin, and the
-/// virtual output's size. KWin names virtual outputs `Virtual-{name}` where
-/// `{name}` is what was passed to `stream_virtual_output`.
-fn query_layout(output_name: &str) -> Result<(DesktopBounds, (i32, i32), (u32, u32))> {
-    let out = Command::new("kscreen-doctor")
-        .arg("-o")
-        .output()
-        .context("running kscreen-doctor -o (part of libkscreen; needed on KDE)")?;
-    if !out.status.success() {
-        bail!(
-            "kscreen-doctor -o failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-
-    let wanted = format!("Virtual-{output_name}");
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-    let mut output_rect: Option<(i32, i32, i32, i32)> = None;
-
-    for line in text.lines() {
-        let Some((x, y, w, h)) = parse_geometry(line) else { continue };
-        min_x = min_x.min(x);
-        min_y = min_y.min(y);
-        max_x = max_x.max(x + w);
-        max_y = max_y.max(y + h);
-        if line.contains(&wanted) {
-            output_rect = Some((x, y, w, h));
-        }
-    }
-    if min_x == i32::MAX {
-        bail!("kscreen-doctor -o reported no enabled outputs");
-    }
-    let (x, y, w, h) = output_rect.with_context(|| {
-        format!("kscreen-doctor -o has no output named {wanted:?}; is the virtual output up?")
-    })?;
-
-    Ok((
-        DesktopBounds { min_x, min_y, max_x, max_y },
-        (x, y),
-        (w as u32, h as u32),
-    ))
-}
-
 /// State machine for one touch gesture in pointer mode.
+///
+/// The tablet behaves like a touchpad: finger motion drives the cursor
+/// *relatively*, and the cursor does not jump to the point of contact. That
+/// is the single biggest difference from a real touchscreen, and it is what
+/// makes this mode work on compositors that associate an absolute pointer
+/// with the primary output regardless of what the host computes.
 #[derive(Debug, Clone, Copy)]
 enum PointerState {
+    /// No finger down.
     Idle,
-    Pressed { down_at: Instant, down_x: u16, down_y: u16 },
-    Dragging,
-    /// Long-press already fired a right-click. Further movement until
-    /// release is ignored.
+    /// Finger down, tracking motion. Tap vs. cursor-move is decided on
+    /// release by comparing the final position against the DOWN position.
+    Touched {
+        down_at: Instant,
+        down_x: u16,
+        down_y: u16,
+        last_x: u16,
+        last_y: u16,
+        /// Set when the previous release was a tap within
+        /// [`DOUBLE_TAP_WINDOW`]. A move past [`TAP_MAX_MOVE`] from the
+        /// current DOWN converts the gesture into a click-drag.
+        pending_drag: bool,
+        /// Latched once the finger has strayed beyond [`TAP_MAX_MOVE`] from
+        /// the DOWN position. Long-press requires that it never did.
+        moved: bool,
+    },
+    /// Left button is held; motion continues until release.
+    Dragging { last_x: u16, last_y: u16 },
+    /// Long-press already fired a right-click. Ignore movement until
+    /// release.
     Consumed,
 }
 
-/// An absolute pointer that drives the mouse cursor on the virtual output.
+/// A relative pointer that behaves like a laptop touchpad.
 ///
-/// No output association is needed: the absolute range covers the whole
-/// desktop, and the host computes the correct position from the output's
-/// own placement. This is what makes the mode immune to the KWin
-/// association bug that plagues `TouchMode::Screen`.
+/// Unlike [`Touchscreen`], no output association is needed and none is
+/// performed: the device emits `REL_X`/`REL_Y` events, which the compositor
+/// applies to whatever cursor position it already has. The absolute pointer
+/// that this replaces — `ABS_X`/`ABS_Y` — needed an output association KWin
+/// refuses to grant for a non-touchscreen, and without one KWin clamped
+/// every event to the primary output.
 pub struct PointerInput {
     device: VirtualDevice,
-    desktop: DesktopBounds,
-    output_origin: (i32, i32),
-    output_size: (u32, u32),
     state: PointerState,
-    /// Last cursor position in the device's `0..32767` range, so a release
-    /// lands at the last known position if the caller passes `(0, 0)`.
-    last_pos: (i32, i32),
+    /// Time of the last tap release, for double-tap detection. Cleared as
+    /// soon as any non-tap gesture or teardown consumes it.
+    last_tap_end: Option<Instant>,
+    /// Fractional cursor motion accumulated but not yet emitted. Without
+    /// this a slow finger drag would round each per-sample delta to zero
+    /// and the cursor would never move.
+    residual: (f32, f32),
+    /// Cursor pixels per unit of normalized finger motion, from
+    /// `--pointer-sensitivity`.
+    sensitivity: f32,
 }
 
 impl PointerInput {
-    pub fn new(
-        name: &str,
-        output_name: &str,
-        fallback_x: i32,
-        fallback_y: i32,
-        fallback_w: u32,
-        fallback_h: u32,
-    ) -> Result<Self> {
-        let (desktop, origin, size) = query_layout(output_name).unwrap_or_else(|e| {
-            tracing::warn!(
-                "pointer: cannot read the layout from kscreen-doctor ({e:#}); \
-                 using the requested position instead"
-            );
-            (
-                DesktopBounds {
-                    min_x: fallback_x,
-                    min_y: fallback_y,
-                    max_x: fallback_x + fallback_w as i32,
-                    max_y: fallback_y + fallback_h as i32,
-                },
-                (fallback_x, fallback_y),
-                (fallback_w, fallback_h),
-            )
-        });
-
+    /// `sensitivity` is cursor pixels per unit of normalized finger motion.
+    /// It is validated at parse time in `main::parse_args`, so by the time
+    /// it reaches here it is a positive, finite number.
+    pub fn new(name: &str, sensitivity: f32) -> Result<Self> {
         Ok(Self {
             device: build_pointer(name)?,
-            desktop,
-            output_origin: origin,
-            output_size: size,
             state: PointerState::Idle,
-            last_pos: (0, 0),
+            last_tap_end: None,
+            residual: (0.0, 0.0),
+            sensitivity,
         })
     }
 
-    /// How long until a held touch becomes a long-press. `None` when no
-    /// touch is held.
+    /// Time until a held, *stationary* touch becomes a long-press. `None`
+    /// when no touch is held or the finger has already moved far enough
+    /// that a long-press would be surprising.
     pub fn time_until_long_press(&self) -> Option<Duration> {
         match self.state {
-            PointerState::Pressed { down_at, .. } => {
-                Some(LONG_PRESS.checked_sub(down_at.elapsed()).unwrap_or(Duration::ZERO))
-            }
+            PointerState::Touched { down_at, moved: false, .. } => Some(
+                LONG_PRESS
+                    .checked_sub(down_at.elapsed())
+                    .unwrap_or(Duration::ZERO),
+            ),
             _ => None,
         }
     }
@@ -469,10 +417,12 @@ impl PointerInput {
     }
 
     pub fn on_long_press(&mut self) -> Result<()> {
-        let PointerState::Pressed { down_x, down_y, .. } = self.state else {
+        if !matches!(self.state, PointerState::Touched { .. }) {
             return Ok(());
-        };
-        self.move_to(down_x, down_y)?;
+        }
+        // Right-click at the *current* cursor position, not at the finger.
+        // A touchpad does the same: the pointer stays where it was and the
+        // button event lands there.
         self.device
             .emit(&[key(KeyCode::BTN_RIGHT, 1), syn()])
             .context("pointer: right button down (long-press)")?;
@@ -480,29 +430,40 @@ impl PointerInput {
             .emit(&[key(KeyCode::BTN_RIGHT, 0), syn()])
             .context("pointer: right button up (long-press)")?;
         self.state = PointerState::Consumed;
+        self.last_tap_end = None;
         Ok(())
     }
 
     /// Release any held button and return to idle. Called on teardown.
     pub fn cancel(&mut self) -> Result<()> {
-        if let PointerState::Dragging = self.state {
+        if let PointerState::Dragging { .. } = self.state {
             self.device
                 .emit(&[key(KeyCode::BTN_LEFT, 0), syn()])
                 .context("pointer: left button up (cancel)")?;
         }
         self.state = PointerState::Idle;
+        self.last_tap_end = None;
+        self.residual = (0.0, 0.0);
         Ok(())
     }
 
     fn on_down(&mut self, x: u16, y: u16) -> Result<()> {
-        // Move the cursor to the touched position immediately. No button
-        // yet: pressing before we know whether this is a tap or a drag
-        // would produce a spurious click on every drag.
-        self.move_to(x, y)?;
-        self.state = PointerState::Pressed {
+        // A second tap within the double-click window begins a pending
+        // drag: the finger has not moved yet, so we do not press the button
+        // until motion actually starts.
+        let pending_drag = self
+            .last_tap_end
+            .map(|t| t.elapsed() < DOUBLE_TAP_WINDOW)
+            .unwrap_or(false);
+        self.residual = (0.0, 0.0);
+        self.state = PointerState::Touched {
             down_at: Instant::now(),
             down_x: x,
             down_y: y,
+            last_x: x,
+            last_y: y,
+            pending_drag,
+            moved: false,
         };
         Ok(())
     }
@@ -510,73 +471,126 @@ impl PointerInput {
     fn on_move(&mut self, x: u16, y: u16) -> Result<()> {
         match self.state {
             PointerState::Idle | PointerState::Consumed => Ok(()),
-            PointerState::Pressed { down_x, down_y, .. } => {
-                let dx = (x as i32 - down_x as i32).unsigned_abs();
-                let dy = (y as i32 - down_y as i32).unsigned_abs();
-                if dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD {
-                    // Escalate to a drag. The button press lands at the
-                    // *original* touch position — that is where the user
-                    // meant to grab — so the cursor returns there before
-                    // the press.
-                    self.move_to(down_x, down_y)?;
+            PointerState::Touched {
+                down_at,
+                down_x,
+                down_y,
+                last_x,
+                last_y,
+                pending_drag,
+                moved,
+            } => {
+                let dx_from_down = (x as i32 - down_x as i32).unsigned_abs();
+                let dy_from_down = (y as i32 - down_y as i32).unsigned_abs();
+                let now_moved =
+                    moved || dx_from_down > TAP_MAX_MOVE || dy_from_down > TAP_MAX_MOVE;
+
+                // Commit a pending double-tap into a real drag as soon as
+                // the finger has moved far enough to be unambiguous.
+                if pending_drag && now_moved {
                     self.device
                         .emit(&[key(KeyCode::BTN_LEFT, 1), syn()])
-                        .context("pointer: left button down (drag)")?;
-                    self.move_to(x, y)?;
-                    self.state = PointerState::Dragging;
+                        .context("pointer: left button down (double-tap drag)")?;
+                    self.state = PointerState::Dragging {
+                        last_x: x,
+                        last_y: y,
+                    };
+                    return Ok(());
                 }
+
+                let (rdx, rdy) = self.relative_delta((last_x, last_y), (x, y));
+                self.emit_relative(rdx, rdy)?;
+                self.state = PointerState::Touched {
+                    down_at,
+                    down_x,
+                    down_y,
+                    last_x: x,
+                    last_y: y,
+                    pending_drag,
+                    moved: now_moved,
+                };
                 Ok(())
             }
-            PointerState::Dragging => self.move_to(x, y),
+            PointerState::Dragging { last_x, last_y } => {
+                let (rdx, rdy) = self.relative_delta((last_x, last_y), (x, y));
+                self.emit_relative(rdx, rdy)?;
+                self.state = PointerState::Dragging {
+                    last_x: x,
+                    last_y: y,
+                };
+                Ok(())
+            }
         }
     }
 
     fn on_up(&mut self, x: u16, y: u16) -> Result<()> {
         let prev = std::mem::replace(&mut self.state, PointerState::Idle);
         match prev {
-            PointerState::Pressed { .. } => {
-                self.move_to(x, y)?;
+            PointerState::Touched { down_x, down_y, moved, .. } => {
+                let dx = (x as i32 - down_x as i32).unsigned_abs();
+                let dy = (y as i32 - down_y as i32).unsigned_abs();
+                if moved || dx > TAP_MAX_MOVE || dy > TAP_MAX_MOVE {
+                    // Moved too far to be a tap: this was a cursor move. No
+                    // click.
+                    self.last_tap_end = None;
+                    return Ok(());
+                }
+                // Quick, stationary touch: left-click.
                 self.device
                     .emit(&[key(KeyCode::BTN_LEFT, 1), syn()])
                     .context("pointer: left button down (tap)")?;
                 self.device
                     .emit(&[key(KeyCode::BTN_LEFT, 0), syn()])
                     .context("pointer: left button up (tap)")?;
+                self.last_tap_end = Some(Instant::now());
                 Ok(())
             }
-            PointerState::Dragging => {
-                self.move_to(x, y)?;
+            PointerState::Dragging { .. } => {
                 self.device
                     .emit(&[key(KeyCode::BTN_LEFT, 0), syn()])
                     .context("pointer: left button up (drag end)")?;
+                self.last_tap_end = None;
                 Ok(())
             }
-            PointerState::Consumed | PointerState::Idle => Ok(()),
+            PointerState::Consumed | PointerState::Idle => {
+                self.last_tap_end = None;
+                Ok(())
+            }
         }
     }
 
-    fn move_to(&mut self, x: u16, y: u16) -> Result<()> {
-        let (abs_x, abs_y) = self.to_device_coords(x, y);
-        self.last_pos = (abs_x, abs_y);
-        self.device
-            .emit(&[
-                abs(AbsoluteAxisCode::ABS_X, abs_x),
-                abs(AbsoluteAxisCode::ABS_Y, abs_y),
-                syn(),
-            ])
-            .context("pointer: cursor move")
+    /// Scale a finger delta from normalized units into cursor pixels,
+    /// carrying the sub-pixel remainder forward so slow drags accumulate
+    /// instead of rounding to zero forever.
+    fn relative_delta(&mut self, last: (u16, u16), now: (u16, u16)) -> (i32, i32) {
+        let dx = now.0 as i32 - last.0 as i32;
+        let dy = now.1 as i32 - last.1 as i32;
+        let fx = dx as f32 * self.sensitivity + self.residual.0;
+        let fy = dy as f32 * self.sensitivity + self.residual.1;
+        let ix = fx.trunc() as i32;
+        let iy = fy.trunc() as i32;
+        self.residual.0 = fx - ix as f32;
+        self.residual.1 = fy - iy as f32;
+        (ix, iy)
     }
 
-    fn to_device_coords(&self, x_norm: u16, y_norm: u16) -> (i32, i32) {
-        let (ox, oy) = self.output_origin;
-        let (ow, oh) = self.output_size;
-        let local_x = ox as i64 + (x_norm as i64 * ow as i64) / 65535;
-        let local_y = oy as i64 + (y_norm as i64 * oh as i64) / 65535;
-        let dw = self.desktop.width() as i64;
-        let dh = self.desktop.height() as i64;
-        let abs_x = ((local_x - self.desktop.min_x as i64) * ABS_RANGE as i64) / dw;
-        let abs_y = ((local_y - self.desktop.min_y as i64) * ABS_RANGE as i64) / dh;
-        (abs_x as i32, abs_y as i32)
+    fn emit_relative(&mut self, dx: i32, dy: i32) -> Result<()> {
+        if dx == 0 && dy == 0 {
+            return Ok(());
+        }
+        // Both axes in one batch, so the compositor applies them as a
+        // single motion event and the cursor does not trace an L-shape.
+        let mut events = Vec::with_capacity(3);
+        if dx != 0 {
+            events.push(rel(RelativeAxisCode::REL_X, dx));
+        }
+        if dy != 0 {
+            events.push(rel(RelativeAxisCode::REL_Y, dy));
+        }
+        events.push(syn());
+        self.device
+            .emit(&events)
+            .context("pointer: cursor move")
     }
 }
 
@@ -587,13 +601,18 @@ fn build_pointer(name: &str) -> Result<VirtualDevice> {
     keys.insert(KeyCode::BTN_MIDDLE);
 
     // `INPUT_PROP_POINTER`, *not* `DIRECT`. This tells libinput the device
-    // drives a cursor rather than a touch surface. Without it, KWin would
-    // apply output association to the absolute axes — exactly the failure
-    // this mode exists to sidestep.
+    // drives a cursor rather than a touch surface. Relative axes plus this
+    // property are what a mouse or touchpad declares, and it is why KWin
+    // treats the events as ordinary pointer motion with no output
+    // association anywhere in the path.
     let mut props = AttributeSet::<PropType>::new();
     props.insert(PropType::POINTER);
 
-    let mut b = VirtualDevice::builder()
+    let mut rel_axes = AttributeSet::<RelativeAxisCode>::new();
+    rel_axes.insert(RelativeAxisCode::REL_X);
+    rel_axes.insert(RelativeAxisCode::REL_Y);
+
+    VirtualDevice::builder()
         .context("opening /dev/uinput")?
         .name(name)
         .input_id(InputId::new(
@@ -605,15 +624,15 @@ fn build_pointer(name: &str) -> Result<VirtualDevice> {
         .with_keys(&keys)
         .context("declaring mouse buttons")?
         .with_properties(&props)
-        .context("declaring INPUT_PROP_POINTER")?;
+        .context("declaring INPUT_PROP_POINTER")?
+        .with_relative_axes(&rel_axes)
+        .context("declaring REL_X/REL_Y")?
+        .build()
+        .context("creating the uinput relative pointer")
+}
 
-    for axis in [AbsoluteAxisCode::ABS_X, AbsoluteAxisCode::ABS_Y] {
-        let setup = UinputAbsSetup::new(axis, AbsInfo::new(0, 0, ABS_RANGE, 0, 0, 0));
-        b = b
-            .with_absolute_axis(&setup)
-            .with_context(|| format!("declaring {axis:?}"))?;
-    }
-    b.build().context("creating the uinput absolute pointer")
+fn rel(axis: RelativeAxisCode, value: i32) -> InputEvent {
+    InputEvent::new(EventType::RELATIVE.0, axis.0, value)
 }
 
 // ----------------------------------------------------------- dispatcher ---
@@ -628,17 +647,8 @@ impl TouchInput {
         Ok(Self::Screen(Touchscreen::new(name, width, height)?))
     }
 
-    pub fn new_pointer(
-        name: &str,
-        output_name: &str,
-        fallback_x: i32,
-        fallback_y: i32,
-        fallback_w: u32,
-        fallback_h: u32,
-    ) -> Result<Self> {
-        Ok(Self::Pointer(PointerInput::new(
-            name, output_name, fallback_x, fallback_y, fallback_w, fallback_h,
-        )?))
+    pub fn new_pointer(name: &str, sensitivity: f32) -> Result<Self> {
+        Ok(Self::Pointer(PointerInput::new(name, sensitivity)?))
     }
 
     /// Time until a held touch becomes a long-press, if the mode has that

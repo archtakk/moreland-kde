@@ -85,16 +85,25 @@ NOTES
                         a manual choice in System Settings -> Input Devices
                         -> Touchscreen takes precedence.
 
-                        `pointer` is an absolute pointer: touches move the
-                        mouse cursor to the corresponding position on the
-                        virtual output, a tap is a left-click, a drag is a
-                        left-button drag, and a long-press (~600 ms without
-                        moving) is a right-click. It needs no output
-                        association — the host positions the cursor
-                        directly from the desktop bounding box reported by
-                        `kscreen-doctor -o` — so it is the mode to use if
-                        the compositor refuses to associate the
-                        touchscreen with the virtual output.
+                        `pointer` turns the tablet into a touchpad. Finger
+                        motion moves the cursor relatively, a tap is a
+                        left-click, a long-press without moving (~600 ms) is
+                        a right-click, and double-tap-then-drag is a
+                        click-drag. No output association is involved, so
+                        this is the mode to use if the compositor refuses
+                        to associate the touchscreen with the virtual
+                        output, or if the tablet is too large for absolute
+                        pointing to feel natural.
+
+    --pointer-sensitivity <F>
+                        cursor pixels per unit of normalized finger motion,
+                        in `--touch-mode pointer` only. Higher is faster.
+                        The default 0.06 moves the cursor roughly one
+                        screen-width per full swipe across the tablet,
+                        which matches the effective sensitivity of a
+                        laptop touchpad. Ignored in `screen` mode. A
+                        non-numeric or non-positive value falls back to
+                        the default with a warning.
 
     Resolution is detected from the tablet's panel and matched to its aspect
     ratio, capped at --max-width. Pass --width and --height together to pin it.

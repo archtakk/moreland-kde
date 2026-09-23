@@ -46,6 +46,10 @@ pub struct Config {
     pub enable_touch: bool,
     /// Which kind of input device to create.
     pub touch_mode: crate::input::TouchMode,
+    /// Cursor pixels per unit of normalized finger motion, in
+    /// `--touch-mode pointer` only. Ignored in `screen` mode. Higher is
+    /// faster. See `--pointer-sensitivity` in `usage.txt`.
+    pub pointer_sensitivity: f32,
     /// Print the end-of-session statistics as a JSON object instead of a
     /// human-readable block. One object per session, one per line (JSONL),
     /// so a multi-device run produces multiple lines. Set by `--json`.
@@ -69,6 +73,7 @@ impl Default for Config {
             rotation: 0,
             enable_touch: true,
             touch_mode: crate::input::TouchMode::Screen,
+            pointer_sensitivity: crate::input::DEFAULT_POINTER_SENSITIVITY,
             json_output: false,
         }
     }
@@ -234,14 +239,9 @@ pub fn run(serial: &str, config: &Config, shutdown: &AtomicBool) -> Result<()> {
                 source.width(),
                 source.height(),
             ),
-            crate::input::TouchMode::Pointer => TouchInput::new_pointer(
-                &device_name,
-                &config.output_name,
-                config.position_x,
-                config.position_y,
-                source.width(),
-                source.height(),
-            ),
+            crate::input::TouchMode::Pointer => {
+                TouchInput::new_pointer(&device_name, config.pointer_sensitivity)
+            }
         };
 
         match device {
@@ -253,7 +253,9 @@ pub fn run(serial: &str, config: &Config, shutdown: &AtomicBool) -> Result<()> {
                         source.height()
                     ),
                     crate::input::TouchMode::Pointer => tracing::info!(
-                        "touch: /dev/uinput absolute pointer {device_name:?} created"
+                        "touch: /dev/uinput relative pointer {device_name:?} created \
+                         (sensitivity {})",
+                        config.pointer_sensitivity
                     ),
                 }
 

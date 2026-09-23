@@ -191,6 +191,28 @@ fn parse_args() -> Args {
                     }
                 };
             }
+            // Cursor sensitivity for `--touch-mode pointer`. Accepts any
+            // positive finite float; the default 0.06 is roughly one
+            // screen-width of cursor travel per full swipe across the
+            // tablet. Zero or negative would make the cursor never move or
+            // move backwards, and NaN would poison every subsequent delta,
+            // so those fall back to the default with a warning — matching
+            // the lenient style of `--brightness` rather than hard-failing
+            // the daemon over a typo.
+            "--pointer-sensitivity" => {
+                let raw = it.next().unwrap_or_default();
+                match raw.parse::<f32>() {
+                    Ok(v) if v > 0.0 && v.is_finite() => {
+                        config.pointer_sensitivity = v;
+                    }
+                    _ => {
+                        eprintln!(
+                            "moreland: ignoring --pointer-sensitivity {raw:?} \
+                             (expected a positive number, e.g. 0.06)"
+                        );
+                    }
+                }
+            }
             "--once" => once = true,
             "--stats" => config.stats = true,
             // --seconds no longer implies --once. The timer sets the global

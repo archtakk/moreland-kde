@@ -11,11 +11,18 @@ There are two modes, chosen with `--touch-mode`:
   `INPUT_PROP_DIRECT` and the multitouch protocol B axes. The compositor
   associates it with an output the same way it associates a physical
   touchscreen.
-- **`pointer`** — an absolute pointer. Touches move the mouse cursor to the
-  corresponding position on the virtual output, a tap is a left click, and a
-  long press (~600 ms without moving) is a right click. No output association
-  is involved; the host computes the cursor position from the desktop bounding
-  box reported by `kscreen-doctor -o`.
+- **`pointer`** — a touchpad-shaped relative pointer. Finger motion drives
+  the cursor relatively (it does not jump to the point of contact), a tap is
+  a left click, a long press without moving (~600 ms) is a right click, and
+  double-tap-then-drag is a click-drag. No output association is involved
+  anywhere in the path, so this mode works even on compositors that would
+  refuse to associate an absolute pointer with anything but their primary
+  output.
+
+  Cursor speed is set by `--pointer-sensitivity <F>`, in cursor pixels per
+  unit of normalized finger motion. The default is `0.06`; higher is faster.
+  If the default feels sluggish, `--pointer-sensitivity 0.12` roughly
+  doubles it. The flag is ignored in `screen` mode.
 
 `--no-touch` disables input entirely; the tablet becomes a display only.
 
