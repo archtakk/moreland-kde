@@ -226,6 +226,11 @@ class VideoStream {
         val target = awaitSurface()
         freeInputs.clear()
         pendingOutbound.clear()
+        // MOVEs bypass the queue (see `sendTouch`), so `pendingOutbound.clear`
+        // does not reach them. A MOVE left over from a previous session
+        // would be appended to the first batch the new session's writer
+        // emits, with coordinates from the old connection. Clear it here.
+        pendingMove.set(null)
 
         val codec = configureCodec(header, target)
         this.codec = codec
@@ -261,7 +266,15 @@ class VideoStream {
             this.codec = null
             runCatching { codec.stop() }
             runCatching { codec.release() }
+            // Interrupt, then join. Without the join the next session can
+            // start before the old writer has exited its loop, and for a
+            // window there are two threads holding two different sockets
+            // and two different `batch` buffers, both draining the same
+            // `pendingOutbound`. A short join is enough: the loop only
+            // blocks on `poll(500ms)` and checks `running` / interrupt
+            // status on every wake.
             writerThread?.interrupt()
+            runCatching { writerThread?.join(1_000) }
             writerThread = null
         }
     }
@@ -408,7 +421,15 @@ class VideoStream {
                     // queue just produced.
                     val pm = pendingMove.getAndSet(null)
                     if (pm != null && offset + Protocol.REVERSE_MSG_LEN <= batch.size) {
-                        offset += appendTouch(batch, offset, pm)
+                        // `appendTouch` returns the *new* offset, not the
+                        // bytes written. `offset += appendTouch(...)` was
+                        // computing `offset + offset + 9`, leaving the bytes
+                        // between the touch payload and the inflated end
+                        // unwritten. Because `batch` is reused across
+                        // iterations those bytes were the previous batch's
+                        // zeros, which the socket faithfully delivered and
+                        // the host decoded as a 9-byte message of type 0.
+                        offset = appendTouch(batch, offset, pm)
                     }
 
                     if (offset > 0) {
