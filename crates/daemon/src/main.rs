@@ -750,6 +750,8 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
         (*s).to_string()
     } else if let Some(s) = panic.downcast_ref::<String>() {
         s.clone()
+    } else if let Some(e) = panic.downcast_ref::<std::io::Error>() {
+        e.to_string()
     } else {
         "<non-string panic payload>".to_string()
     }
