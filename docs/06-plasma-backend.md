@@ -236,7 +236,8 @@ protocol offers no error code to match on.
 ## Verification
 
 ```bash
-scripts/moreland-doctor.sh          # reports the grant under "KDE backend prerequisites"
+scripts/moreland-doctor.sh          # reports the grant under
+                                    # "Capture path (KDE Plasma: ...)"
 kbuildsycoca6 --noincremental       # after any change to the desktop entry
 wayland-info | grep zkde_screencast # empty for an undeclared client; that is the gate working
 ```

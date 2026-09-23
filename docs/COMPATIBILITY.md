@@ -201,12 +201,25 @@ more than one desktop, and it is not currently implemented.
 
 ## GPU compatibility
 
-Should be broader than the compositor story.
+Two encoder backends, selected at runtime from what GStreamer has registered
+(`crates/encoder/src/lib.rs::select_backend`):
 
-The encoder chain is `vapostproc` → `vah264enc`, which works on any GPU with a
-VA-API driver — AMD (VCN), Intel (QuickSync), and NVIDIA via `nvidia-vaapi-driver`.
+- **VA-API** — `vapostproc` → `vah264enc`. AMD VCN, Intel QuickSync.
+- **NVENC via GL** — `glupload` → `glcolorconvert` → `gldownload` → `nvh264enc`.
+  NVIDIA. `nvh264enc` is checked first and wins when present, because
+  `nvidia-vaapi-driver` is decode-only: `vah264enc` either fails to create or
+  produces a stream nothing decodes.
 
-The one thing that *was* hardcoded is now probed at runtime:
+The GL hop on the NVIDIA path exists because `cudaupload` does not accept
+`memory:DMABuf` in GStreamer 1.28, and the buffers the compositor hands out are
+tiled — their modifier carries the NVIDIA vendor prefix `0x03` in the top byte.
+`glupload` is the one importer that reads the modifier and asks the GL driver
+to import the tiled buffer correctly; `gldownload` then produces the NV12 that
+`nvh264enc` accepts. A straight mmap of a tiled NVIDIA buffer produces a
+scrambled image, so this is not an optimisation — it is the only correct path
+on that vendor.
+
+**Modifier probing** applies to the VA-API path.
 `encoder::supported_modifiers()` asks the local VA stack which DRM format
 modifiers it can import, instead of assuming AMD's. This matters because
 compositors offer modifiers the encoder cannot read — on AMD, DCC-compressed
@@ -214,7 +227,12 @@ tilings — and GBM will happily prefer one. The failure mode is not an error bu
 a **silent fallback to a CPU copy**, which quietly destroys the zero-copy
 design. A hardcoded modifier is correct on exactly one GPU.
 
-Untested on Intel and NVIDIA. The probing makes it plausible, not proven.
+Verified on AMD VCN 2.x (VA-API). **NVENC-via-GL is verified on NVIDIA
+Turing** (a GTX 1650 Mobile running KWin 6.7.4). Later generations should be
+no different — `nvh264enc`, `glupload` and `gldownload` are vendor-agnostic
+over GStreamer, and the tiling modifier the GL importer reads is not
+generation-specific. Intel QuickSync uses the same VA-API chain as AMD and
+should work; untested.
 
 ## Android compatibility
 

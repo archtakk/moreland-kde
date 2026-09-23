@@ -64,8 +64,13 @@ to have it silently not hold. See [Multi-GPU hosts](#multi-gpu-hosts).
 **Host**
 
 - Hyprland, labwc with `wlr-randr`, or KDE Plasma (see [Compatibility](#compatibility))
-- A GPU with VA-API encode - AMD, Intel, or NVIDIA via `nvidia-vaapi-driver`
-- `gstreamer`, `gst-plugins-base`, `gst-plugin-va`, `libva`
+- A GPU with hardware H.264 encode. Two paths exist and the daemon picks one
+  at runtime: VA-API (`vapostproc` + `vah264enc`) on AMD and Intel, or
+  NVENC-via-GL (`glupload` + `glcolorconvert` + `gldownload` + `nvh264enc`)
+  on NVIDIA. On NVIDIA, install `gst-plugins-bad` for `nvh264enc` rather than
+  `nvidia-vaapi-driver`; the latter is decode-only
+- `gstreamer`, `gst-plugins-base`, plus `gst-plugin-va` (AMD/Intel) or
+  `gst-plugins-bad` (NVIDIA)
 - `android-tools` (adb), Rust toolchain
 
 Arch / EndeavourOS:
@@ -261,8 +266,9 @@ terminals, and browsing; it is not fine for gaming or stylus work.
 | Sway / other wlroots  | Capture should work unchanged; output creation unimplemented                                        |
 | KDE Plasma (KWin)     | **Works** via `zkde_screencast_unstable_v1` + PipeWire - see [docs/06-plasma-backend.md](docs/06-plasma-backend.md) |
 | GNOME (Mutter)        | Requires a portal/PipeWire capture backend; Mutter implements neither wlr nor ext capture protocols |
-| AMD VA-API            | Verified                                                                                            |
-| Intel / NVIDIA VA-API | Plausible, untested - modifiers are probed at runtime                                               |
+| AMD VCN (VA-API)      | Verified                                                                                            |
+| NVIDIA NVENC (via GL) | Verified on Turing (GTX 1650 Mobile) — `glupload` reads the tiling modifier the compositor writes   |
+| Intel QuickSync       | Plausible, untested — same VA-API chain as AMD, modifiers probed at runtime                          |
 | Android 10+           | Verified on 14; nothing vendor-specific required                                                    |
 
 To check your own machine:
@@ -271,10 +277,12 @@ To check your own machine:
 ./scripts/moreland-doctor.sh
 ```
 
-It reports the compositor, the capture protocol, the VA-API encoder and the ADB
+It reports the compositor, the capture path, the VA-API encoder and the ADB
 link, and names whatever blocks you. Note that your **distribution is not the
 deciding factor** - the compositor is. Fedora or Debian running Hyprland should
-work; Arch running Plasma does not (the script will work with Plasma soon enough).
+work, and Arch running Plasma should too: the script checks for the KDE grant,
+the Plasma screencast XML and a running PipeWire instead of the ext- protocol
+that KWin does not implement.
 
 On a compositor that implements `ext-image-copy-capture-v1`, only **one** stage
 is compositor-specific: creating the headless output. Capture uses that standard
@@ -376,11 +384,8 @@ wrong:
 | [02-encode.md](docs/02-encode.md)               | VA-API encoding and tuning                                     |
 | [03-transport.md](docs/03-transport.md)         | Wire protocol and USB transport                                |
 | [04-android-app.md](docs/04-android-app.md)     | The tablet app                                                 |
-| [05-daemon.md](docs/05-daemon.md)               | Hotplug detection and the service                             
-|
-| [06-plasma-backend.md](docs/06-plasma-backend.md)
-| About the KDE Plasma support
-|
+| [05-daemon.md](docs/05-daemon.md)               | Hotplug detection and the service                              |
+| [06-plasma-backend.md](docs/06-plasma-backend.md)| About the KDE Plasma support                                  |
 | [COMPATIBILITY.md](docs/COMPATIBILITY.md)       | What other compositors and GPUs need                           |
 | [REVERT.md](docs/REVERT.md)                     | How to undo everything                                         |
 
