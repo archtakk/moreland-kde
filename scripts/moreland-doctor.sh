@@ -224,7 +224,8 @@ head_ "Encoder (hardware H.264)"
 if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
     fail "gst-inspect-1.0 not found"
     block "GStreamer is not installed"
-elif gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
+elif [ -e /proc/driver/nvidia/version ] \
+     && gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
     ENCODER_BACKEND="nvenc"
     info "encoder path: NVENC via GL — nvh264enc present, the daemon selects"
     info "             this over VA-API (see crates/encoder/src/lib.rs)"

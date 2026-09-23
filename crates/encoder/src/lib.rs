@@ -56,11 +56,28 @@ enum Backend {
 }
 
 fn select_backend() -> Backend {
-    if gst::ElementFactory::find("nvh264enc").is_some() {
+    if nvidia_driver_present() && gst::ElementFactory::find("nvh264enc").is_some() {
         Backend::NvencGl
     } else {
         Backend::Vaapi
     }
+}
+
+/// Whether the NVIDIA proprietary driver is loaded on this machine.
+///
+/// `ElementFactory::find("nvh264enc")` only consults the plugin registry,
+/// and `nvh264enc` ships in `gst-plugins-bad`, which most desktops install
+/// for unrelated reasons (AAC, H.265, WebRTC). On an AMD or Intel machine
+/// that happens to have it, the factory lookup succeeds and the daemon
+/// would pick the NVENC path — which then fails at the first frame,
+/// because `nvh264enc` cannot initialise without `libnvidia-encode` and
+/// an actual device.
+///
+/// `/proc/driver/nvidia/version` is written by the proprietary driver at
+/// load time and is absent otherwise. Nouveau does not create it, and
+/// nouveau cannot drive `nvh264enc` in any case, so the check is exact.
+fn nvidia_driver_present() -> bool {
+    std::path::Path::new("/proc/driver/nvidia/version").exists()
 }
 
 /// DRM format modifiers the encoder chain can import for `fourcc`.
